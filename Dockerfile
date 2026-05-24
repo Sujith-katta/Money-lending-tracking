@@ -1,52 +1,40 @@
-# Stage 1: Build the Spring Boot application
-# Uses a JDK image from Eclipse Temurin for compilation.
-FROM eclipse-temurin:17-jdk-focal AS builder
+# Stage 1: Build React frontend
+FROM node:20-alpine AS frontend-builder
 
-# Set the working directory inside the container for the build stage.
 WORKDIR /app
 
-# Copy the Gradle wrapper and its directory.
-# This allows you to use the Gradle wrapper (gradlew) inside the container.
-COPY gradlew .
-COPY gradle gradle
+COPY package.json package-lock.json ./
+RUN npm ci
 
-# Copy the build configuration files.
-# build.gradle: Main build script.
-# settings.gradle: Defines multi-project builds if applicable.
-COPY build.gradle settings.gradle .
+COPY public public
+COPY src/App.js src/index.js src/index.css src/
+COPY src/components src/components
+COPY src/services src/services
 
-# Copy the source code.
-# The `src` directory contains your Java source files, resources, etc.
+ENV REACT_APP_API_URL=/api
+RUN npm run build
+
+# Stage 2: Build Spring Boot application
+FROM eclipse-temurin:21-jdk-jammy AS backend-builder
+
+WORKDIR /app
+
+COPY mvnw .
+COPY .mvn .mvn
+COPY pom.xml .
 COPY src src
 
-# Make the Gradle wrapper script executable.
-RUN chmod +x gradlew
+COPY --from=frontend-builder /app/build ./src/main/resources/static
 
-# Build the Spring Boot application into an executable JAR.
-# `bootJar` task creates the executable JAR.
-# `-x test` skips running tests during the Docker build, which speeds up the build process.
-# This assumes your main JAR will be named `Billing-0.0.1-SNAPSHOT.jar` based on your
-# build.gradle `group` and `version`.
-RUN ./gradlew bootJar -x test
+RUN chmod +x mvnw && ./mvnw -B -DskipTests package
 
-# Stage 2: Create the final, lightweight runtime image
-# Uses a JRE image from Eclipse Temurin, which is much smaller than a JDK image.
-FROM eclipse-temurin:17-jre-focal
+# Stage 3: Runtime image
+FROM eclipse-temurin:21-jre-jammy
 
-# Set the working directory inside the container for the runtime stage.
 WORKDIR /app
 
-# Copy the executable JAR from the builder stage to the final image.
-# The JAR is copied from `/app/build/libs/Billing-0.0.1-SNAPSHOT.jar` in the builder stage
-# and renamed to `app.jar` in the current stage for simplicity.
-COPY --from=builder /app/build/libs/Billing-0.0.1-SNAPSHOT.jar app.jar
+COPY --from=backend-builder /app/target/Lending-0.0.1-SNAPSHOT.jar app.jar
 
-# Expose the port on which your Spring Boot application will listen.
-# Based on your application.properties, this is 9090.
-EXPOSE 9090
+EXPOSE 8080
 
-# Define the command to run your application when the container starts.
-# `java -jar app.jar` executes the Spring Boot application.
-# Spring Boot automatically picks up the `server.port` from application.properties
-# and will also respect the `PORT` environment variable set by Render if it's different.
 ENTRYPOINT ["java", "-jar", "app.jar"]
